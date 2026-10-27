@@ -1,0 +1,150 @@
+/* Tokens – Tres palett, se SPEC.md §7. Röd används aldrig (reserverad för prispunkter).
+   Orange och magenta ytor har svart text för kontrastens skull (N-03). */
+:root {
+  --ink: #000;
+  --paper: #fff;
+  --soft: #efefef;     /* Mjuk vit */
+  --brand: #ff5c00;    /* Orange */
+  --accent: #fa208f;   /* Magenta – endast brister */
+  --muted: #6e6e6e;
+  --line: var(--soft);
+  --gutter: 20px;
+  --max: 680px;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font: 16px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+button, input, textarea, select { font: inherit; color: inherit; }
+
+:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+/* Topp */
+.bar {
+  position: sticky; top: 0; z-index: 2;
+  display: flex; justify-content: space-between; align-items: center;
+  height: 56px; padding: 0 var(--gutter);
+  background: var(--paper);
+}
+.bar-home {
+  border: 0; background: none; padding: 0; cursor: pointer;
+  font-weight: 700; letter-spacing: -0.01em;
+}
+.bar-progress { color: var(--muted); font-variant-numeric: tabular-nums; }
+.meter { position: sticky; top: 56px; z-index: 2; height: 2px; background: var(--line); }
+.meter { height: 3px; }
+.meter span { display: block; height: 100%; width: 0; background: var(--brand); transition: width .2s; }
+.bar-home { display: inline-flex; align-items: center; gap: 10px; }
+.bar-home img { display: block; height: 24px; width: auto; }
+
+main {
+  max-width: var(--max);
+  margin: 0 auto;
+  padding: 32px var(--gutter) 120px;
+}
+
+/* Typografi */
+h1 { font-size: 40px; line-height: 1.05; letter-spacing: -0.03em; margin: 0 0 8px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 40px 0 12px; font-weight: 600; }
+.lead { color: var(--muted); margin: 0 0 32px; }
+.eyebrow { color: var(--muted); font-size: 14px; margin: 0 0 4px; font-variant-numeric: tabular-nums; }
+.note { color: var(--muted); font-size: 13px; margin-top: 48px; }
+
+/* Knappar */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 48px; padding: 0 22px;
+  border: 1px solid var(--ink); background: var(--paper);
+  cursor: pointer; font-weight: 600;
+}
+.btn.primary { background: var(--brand); border-color: var(--brand); color: var(--ink); }
+.btn.block { width: 100%; }
+.btn:disabled { opacity: .35; cursor: not-allowed; }
+.link { border: 0; background: none; padding: 0; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; color: var(--muted); }
+
+/* Fält */
+.field { display: block; margin-bottom: 20px; }
+.field span { display: block; font-size: 14px; color: var(--muted); margin-bottom: 6px; }
+.field input, .field textarea, .field select {
+  width: 100%; min-height: 48px; padding: 10px 0;
+  border: 0; border-bottom: 1px solid var(--ink); border-radius: 0;
+  background: transparent;
+}
+.field textarea { min-height: 72px; resize: vertical; }
+.field input:focus, .field textarea:focus, .field select:focus { outline: none; border-bottom-width: 2px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+@media (max-width: 480px) { .grid2 { grid-template-columns: 1fr; } }
+
+/* Lista med ronder / områden */
+.list { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+.list li { border-bottom: 1px solid var(--line); }
+.list button {
+  width: 100%; display: flex; justify-content: space-between; align-items: baseline; gap: 16px;
+  min-height: 64px; padding: 14px 0; border: 0; background: none; text-align: left; cursor: pointer;
+}
+.list .meta { color: var(--muted); font-size: 14px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.flag, .prio { display: inline-block; padding: 1px 7px; background: var(--accent); color: var(--ink); font-weight: 600; }
+.list .flag { font-size: 13px; }
+
+/* Rad i checklistan */
+.row { padding: 20px 0; border-bottom: 1px solid var(--line); }
+.row:first-child { border-top: 1px solid var(--line); }
+.row-text { margin: 0 0 12px; }
+.seg { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
+.seg button {
+  min-height: 44px; border: 1px solid var(--line); background: var(--paper);
+  cursor: pointer; font-size: 15px;
+}
+.seg button:hover { border-color: var(--ink); }
+.seg [data-v="ok"][aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+.seg [data-v="brist"][aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--ink); font-weight: 600; }
+.seg [data-v="na"][aria-pressed="true"] { border-color: var(--soft); color: var(--ink); background: var(--soft); }
+.row-more { margin-top: 16px; }
+.row-more.brist { padding-left: 14px; border-left: 2px solid var(--accent); }
+.row .link { margin-top: 12px; font-size: 14px; }
+
+/* Lägg till rad */
+.add { display: flex; gap: 8px; margin-top: 24px; }
+.add input { flex: 1; min-height: 48px; border: 0; border-bottom: 1px solid var(--line); padding: 0; background: transparent; }
+.add input:focus { outline: none; border-bottom-color: var(--ink); }
+
+/* Fot med navigering */
+.foot {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 2;
+  background: var(--paper); border-top: 1px solid var(--line);
+  padding: 12px var(--gutter) calc(12px + env(safe-area-inset-bottom));
+}
+.foot-inner { max-width: var(--max); margin: 0 auto; display: flex; gap: 8px; }
+.foot-inner .btn { flex: 1; }
+
+/* Sammanfattning */
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--ink); }
+.stats div { padding: 16px 0; }
+.stats b { display: block; font-size: 32px; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.stats span { font-size: 13px; color: var(--muted); }
+.stats .hit b { color: var(--accent); }
+.plan { list-style: none; margin: 0; padding: 0; }
+.plan li { padding: 16px 0; border-bottom: 1px solid var(--line); }
+.plan .prio { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+.plan p { margin: 4px 0 0; }
+.plan .sub { color: var(--muted); font-size: 14px; }
+.empty { color: var(--muted); }
+.actions { display: grid; gap: 8px; margin-top: 40px; }
+
+/* Utskrift (reserv om PDF-biblioteket inte laddas) */
+.print-only { display: none; }
+@media print {
+  .bar, .meter, main, .foot { display: none !important; }
+  .print-only { display: block; font-size: 11pt; }
+  .print-only h1 { font-size: 22pt; }
+  .print-only table { width: 100%; border-collapse: collapse; }
+  .print-only td, .print-only th { border-bottom: 1px solid #ccc; padding: 4px 6px 4px 0; text-align: left; vertical-align: top; }
+}
