@@ -74,7 +74,7 @@ function migrate(rond) {
   const areaOfRow = {};
   CHECKLIST.forEach((a) => a.rader.forEach((r) => { areaOfRow[r.id] = a; }));
   const enhetFor = (area) => {
-    if (area.slag === "plats") byggnad.platser[area.id] = v.id;
+    if (area.slag === "plats") byggnad.platser[area.id] = [v.id];
     return area.slag === KONTOR ? KONTOR : v.id;
   };
 
@@ -114,9 +114,15 @@ function unitName(rond, enhet) {
   return units(rond).find((u) => u.id === enhet)?.namn || "";
 }
 
+// En plats kan finnas på flera våningar. Äldre data har ett enda våning-ID.
+function platsVaningar(byggnad, platsId) {
+  const v = byggnad.platser[platsId];
+  return Array.isArray(v) ? v : v ? [v] : [];
+}
+
 function areasFor(rond, enhet) {
   if (enhet === KONTOR) return CHECKLIST.filter((a) => a.slag === "kontor");
-  return CHECKLIST.filter((a) => a.slag === "vaning" || (a.slag === "plats" && rond.byggnad.platser[a.id] === enhet));
+  return CHECKLIST.filter((a) => a.slag === "vaning" || (a.slag === "plats" && platsVaningar(rond.byggnad, a.id).includes(enhet)));
 }
 
 function areaRows(rond, enhet, area) {
@@ -200,7 +206,7 @@ function setFloors(rond, names) {
     return { id, namn };
   });
   Object.keys(rond.byggnad.platser).forEach((k) => {
-    if (!used.has(rond.byggnad.platser[k])) rond.byggnad.platser[k] = null;
+    rond.byggnad.platser[k] = platsVaningar(rond.byggnad, k).filter((id) => used.has(id));
   });
   rond.byggnad.vaningar = vaningar;
   saveBuilding(rond);
@@ -266,11 +272,12 @@ function renderHome() {
 }
 
 function platserHtml(rond) {
-  return PLATSER.map((a) => `
-    <label class="field"><span>${esc(a.titel)}</span><select data-plats="${a.id}">
-      <option value="">Finns inte</option>
-      ${rond.byggnad.vaningar.map((v) => `<option value="${v.id}" ${rond.byggnad.platser[a.id] === v.id ? "selected" : ""}>${esc(v.namn)}</option>`).join("")}
-    </select></label>`).join("");
+  return PLATSER.map((a) => {
+    const valda = platsVaningar(rond.byggnad, a.id);
+    return `<fieldset class="plats"><legend>${esc(a.titel)}</legend><div class="chips">
+      ${rond.byggnad.vaningar.map((v) => `<label class="chip"><input type="checkbox" data-plats="${a.id}" value="${v.id}" ${valda.includes(v.id) ? "checked" : ""}><span>${esc(v.namn)}</span></label>`).join("")}
+    </div></fieldset>`;
+  }).join("");
 }
 
 function renderInfo(rond) {
@@ -294,7 +301,8 @@ function renderInfo(rond) {
       <button class="link">Fyll i Våning 1–N</button>
     </form>
     <h2>Var finns</h2>
-    <div class="grid2" id="platser">${platserHtml(rond)}</div>
+    <p class="hint">Markera alla våningar där platsen finns.</p>
+    <div id="platser">${platserHtml(rond)}</div>
 
     <p><button class="link" data-act="del">Ta bort ronden</button></p>
     ${foot(`<button class="btn primary" data-act="start">${counts(rond).klara ? "Till översikten" : "Starta rond"}</button>`)}`;
@@ -323,9 +331,9 @@ function renderInfo(rond) {
     applyFloors();
   };
   platserEl.onchange = (e) => {
-    const sel = e.target.closest("[data-plats]");
-    if (!sel) return;
-    rond.byggnad.platser[sel.dataset.plats] = sel.value || null;
+    const id = e.target.dataset.plats;
+    if (!id) return;
+    rond.byggnad.platser[id] = [...platserEl.querySelectorAll(`[data-plats="${id}"]:checked`)].map((c) => c.value);
     saveBuilding(rond);
     setProgress(rond);
   };
@@ -578,7 +586,10 @@ function buildingText(rond) {
 }
 
 function placesText(rond) {
-  return PLATSER.map((a) => `${a.titel}: ${unitName(rond, rond.byggnad.platser[a.id]) || "finns inte"}`).join(" · ");
+  return PLATSER.map((a) => {
+    const namn = platsVaningar(rond.byggnad, a.id).map((id) => unitName(rond, id)).filter(Boolean);
+    return `${a.titel}: ${namn.join(", ") || "finns inte"}`;
+  }).join(" · ");
 }
 
 // F-30: kort sammanfattning av ett område på en våning

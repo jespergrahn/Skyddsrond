@@ -135,6 +135,13 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 /* Byggnad */
 .hint { color: var(--muted); font-size: 14px; margin: -4px 0 16px; }
 .quick { display: flex; align-items: center; gap: 10px; margin: -8px 0 8px; color: var(--muted); font-size: 14px; }
+.plats { border: 0; padding: 0; margin: 0 0 20px; }
+.plats legend { padding: 0; margin-bottom: 8px; font-size: 14px; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip input { position: absolute; opacity: 0; }
+.chip span { display: inline-flex; align-items: center; min-height: 40px; padding: 0 14px; border: 1px solid var(--ink); cursor: pointer; font-size: 14px; }
+.chip input:checked + span { background: var(--ink); color: var(--paper); }
+.chip input:focus-visible + span { outline: 2px solid var(--ink); outline-offset: 2px; }
 .quick input { width: 72px; min-height: 40px; border: 0; border-bottom: 1px solid var(--ink); background: transparent; }
 
 /* Lägg till rad */
