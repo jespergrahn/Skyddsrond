@@ -271,11 +271,23 @@ function renderHome() {
   });
 }
 
+function isDefaultBuilding(rond) {
+  const v = rond.byggnad.vaningar;
+  return v.length === 1 && v[0].namn === "Kontoret";
+}
+
+function hasCustomNames(rond) {
+  return !isDefaultBuilding(rond) && rond.byggnad.vaningar.some((v, k) => v.namn !== `Våning ${k + 1}`);
+}
+
 function platserHtml(rond) {
-  return PLATSER.map((a) => {
+  const hint = rond.byggnad.vaningar.length < 2
+    ? `<p class="hint">Fyll i antal våningar ovan så kan du välja våning här.</p>`
+    : `<p class="hint">Markera alla våningar där platsen finns.</p>`;
+  return hint + PLATSER.map((a) => {
     const valda = platsVaningar(rond.byggnad, a.id);
     return `<fieldset class="plats"><legend>${esc(a.titel)}</legend><div class="chips">
-      ${rond.byggnad.vaningar.map((v) => `<label class="chip"><input type="checkbox" data-plats="${a.id}" value="${v.id}" ${valda.includes(v.id) ? "checked" : ""}><span>${esc(v.namn)}</span></label>`).join("")}
+      ${rond.byggnad.vaningar.map((v) => `<label class="chip"><input type="checkbox" data-plats="${a.id}" value="${v.id}" ${valda.includes(v.id) ? "checked" : ""}><span>${esc(shortName(v.namn))}</span></label>`).join("")}
     </div></fieldset>`;
   }).join("");
 }
@@ -294,14 +306,11 @@ function renderInfo(rond) {
 
     <h2>Byggnad</h2>
     <p class="hint">Sparas till nästa rond.</p>
-    <label class="field"><span>Våningar, en per rad</span><textarea id="floors" rows="6">${esc(rond.byggnad.vaningar.map((v) => v.namn).join("\n"))}</textarea></label>
-    <form class="quick" id="quick">
-      <span>Snabbval:</span>
-      <input type="number" min="1" max="60" inputmode="numeric" placeholder="14" aria-label="Antal våningar">
-      <button class="link">Fyll i Våning 1–N</button>
-    </form>
+    <label class="field"><span>Antal våningar</span><input id="count" type="number" min="1" max="60" inputmode="numeric" placeholder="t.ex. 14" value="${isDefaultBuilding(rond) ? "" : rond.byggnad.vaningar.length}"></label>
+    <details class="names"${hasCustomNames(rond) ? " open" : ""}><summary>Ändra namn på våningarna</summary>
+      <label class="field"><span>En våning per rad, nerifrån och upp</span><textarea id="floors" rows="6">${esc(rond.byggnad.vaningar.map((v) => v.namn).join("\n"))}</textarea></label>
+    </details>
     <h2>Var finns</h2>
-    <p class="hint">Markera alla våningar där platsen finns.</p>
     <div id="platser">${platserHtml(rond)}</div>
 
     <p><button class="link" data-act="del">Ta bort ronden</button></p>
@@ -315,21 +324,30 @@ function renderInfo(rond) {
   });
 
   const floorsEl = app.querySelector("#floors");
+  const countEl = app.querySelector("#count");
   const platserEl = app.querySelector("#platser");
   const applyFloors = () => {
     setFloors(rond, floorsEl.value.split("\n"));
     platserEl.innerHTML = platserHtml(rond);
     setProgress(rond);
   };
-  floorsEl.oninput = applyFloors;
-  app.querySelector("#quick").onsubmit = (e) => {
-    e.preventDefault();
-    const input = e.target.querySelector("input");
-    const n = Math.min(60, parseInt(input.value, 10) || 0);
-    if (n < 1) { input.focus(); return; }
-    floorsEl.value = Array.from({ length: n }, (_, k) => `Våning ${k + 1}`).join("\n");
+  floorsEl.oninput = () => {
+    applyFloors();
+    countEl.value = rond.byggnad.vaningar.length;
+  };
+  // Fördröjt så att t.ex. 14 → 15 inte hinner bli 1 våning på vägen och tappa valda platser
+  let countTimer;
+  const applyCount = () => {
+    clearTimeout(countTimer);
+    const n = Math.min(60, parseInt(countEl.value, 10) || 0);
+    if (n < 1) return;
+    const names = isDefaultBuilding(rond) ? [] : rond.byggnad.vaningar.map((v) => v.namn).slice(0, n);
+    for (let k = names.length; k < n; k++) names.push(`Våning ${k + 1}`);
+    floorsEl.value = names.join("\n");
     applyFloors();
   };
+  countEl.oninput = () => { clearTimeout(countTimer); countTimer = setTimeout(applyCount, 700); };
+  countEl.onchange = applyCount;
   platserEl.onchange = (e) => {
     const id = e.target.dataset.plats;
     if (!id) return;
@@ -338,7 +356,7 @@ function renderInfo(rond) {
     setProgress(rond);
   };
 
-  startBtn.onclick = () => { applyFloors(); go(`#/r/${rond.id}/oversikt`); };
+  startBtn.onclick = () => { applyCount(); applyFloors(); go(`#/r/${rond.id}/oversikt`); };
   app.querySelector("[data-act=del]").onclick = () => {
     if (confirm("Ta bort ronden? Det går inte att ångra.")) { delete db.ronder[rond.id]; save(); go("#/"); }
   };
@@ -405,11 +423,15 @@ function rowHtml(rond, r) {
   </div>`;
 }
 
+function shortName(namn) {
+  return namn.replace(/^(våning|vån\.?|plan)\s*/i, "") || namn;
+}
+
 function sideNavHtml(rond, current) {
   return units(rond).map((u) => {
     const c = counts(rond, unitRows(rond, u.id));
     const st = c.brist ? `<span class="flag">${c.brist}</span>` : !c.tom ? "✓" : c.klara ? `<span class="cnt">${c.klara}/${c.total}</span>` : "";
-    const short = u.id === KONTOR ? "Gemensamt" : u.namn.replace(/^(våning|vån\.?|plan)\s*/i, "") || u.namn;
+    const short = u.id === KONTOR ? "Gemensamt" : shortName(u.namn);
     return `<button type="button" data-go="${u.id}" ${u.id === current ? 'aria-current="page"' : ""}>
       <span class="full">${esc(u.id === KONTOR ? "Gemensamt" : u.namn)}</span><span class="short">${esc(short)}</span><span class="meta">${st}</span></button>`;
   }).join("");
