@@ -144,6 +144,32 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 .chip input:focus-visible + span { outline: 2px solid var(--ink); outline-offset: 2px; }
 .quick input { width: 72px; min-height: 40px; border: 0; border-bottom: 1px solid var(--ink); background: transparent; }
 
+/* Hoppa mellan våningar: rad överst på mobil, sidomeny på bred skärm */
+.sidenav {
+  position: sticky; top: 59px; z-index: 1;
+  display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
+  margin: -20px calc(-1 * var(--gutter)) 24px; padding: 10px var(--gutter);
+  background: var(--paper); border-bottom: 1px solid var(--line);
+}
+.sidenav button {
+  flex: none; display: inline-flex; align-items: center; gap: 8px;
+  min-height: 40px; padding: 0 12px; border: 1px solid var(--line); background: var(--paper);
+  cursor: pointer; font-size: 14px; white-space: nowrap;
+}
+.sidenav button:hover { border-color: var(--ink); }
+.sidenav button[aria-current] { background: var(--ink); border-color: var(--ink); color: var(--paper); }
+.sidenav .meta { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.sidenav [aria-current] .meta { color: var(--paper); }
+.sidenav .flag { font-size: 12px; padding: 0 6px; }
+@media (min-width: 1200px) {
+  .sidenav {
+    position: fixed; top: 91px; left: calc(50% - var(--max) / 2 - 240px); width: 200px;
+    max-height: calc(100vh - 200px); flex-direction: column; gap: 2px;
+    overflow-x: hidden; overflow-y: auto; margin: 0; padding: 0; border: 0;
+  }
+  .sidenav button { width: 100%; justify-content: space-between; border-color: transparent; }
+}
+
 /* Lägg till rad */
 .add { display: flex; gap: 8px; margin-top: 24px; }
 .add input { flex: 1; min-height: 48px; border: 0; border-bottom: 1px solid var(--line); padding: 0; background: transparent; }

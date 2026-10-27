@@ -405,6 +405,15 @@ function rowHtml(rond, r) {
   </div>`;
 }
 
+function sideNavHtml(rond, current) {
+  return units(rond).map((u) => {
+    const c = counts(rond, unitRows(rond, u.id));
+    const st = c.brist ? `<span class="flag">${c.brist}</span>` : !c.tom ? "✓" : c.klara ? `${c.klara}/${c.total}` : "";
+    return `<button type="button" data-go="${u.id}" ${u.id === current ? 'aria-current="page"' : ""}>
+      <span>${esc(u.id === KONTOR ? "Gemensamt" : u.namn)}</span><span class="meta">${st}</span></button>`;
+  }).join("");
+}
+
 // F-28: ett område som block med Allt OK / Gå igenom
 function areaHtml(rond, enhet, area) {
   const rows = areaRows(rond, enhet, area);
@@ -438,6 +447,7 @@ function renderUnit(rond, enhet) {
   const eyebrow = enhet === KONTOR ? "Görs en gång" : `Våning ${idx} av ${list.length - 1}`;
 
   app.innerHTML = `
+    <nav class="sidenav" id="sidenav" aria-label="Våningar">${sideNavHtml(rond, enhet)}</nav>
     <p class="eyebrow">${eyebrow}</p>
     <h1>${esc(unitName(rond, enhet))}</h1>
     <p class="lead" id="unit-count"></p>
@@ -452,8 +462,17 @@ function renderUnit(rond, enhet) {
     app.querySelector("#unit-count").textContent =
       `${c.klara} av ${c.total} bedömda${c.brist ? ` · ${plural(c.brist, "brist", "brister")}` : ""}`;
     setProgress(rond);
+    const left = nav.scrollLeft, top = nav.scrollTop;
+    nav.innerHTML = sideNavHtml(rond, enhet);
+    nav.scrollLeft = left; nav.scrollTop = top;
+  };
+  const nav = app.querySelector("#sidenav");
+  nav.onclick = (e) => {
+    const b = e.target.closest("[data-go]");
+    if (b && b.dataset.go !== enhet) go(`#/r/${rond.id}/e/${b.dataset.go}`);
   };
   updateCount();
+  nav.querySelector("[aria-current]")?.scrollIntoView({ block: "nearest", inline: "center" });
 
   const refresh = (sec, area, focusKey) => {
     sec.outerHTML = areaHtml(rond, enhet, area);
