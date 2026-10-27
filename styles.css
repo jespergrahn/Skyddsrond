@@ -24,6 +24,7 @@ body {
 }
 
 button, input, textarea, select { font: inherit; color: inherit; }
+button { -webkit-appearance: none; appearance: none; border-radius: 0; -webkit-tap-highlight-color: transparent; }
 
 :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 
@@ -188,6 +189,7 @@ h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: v
 }
 .foot-inner { max-width: var(--max); margin: 0 auto; display: flex; gap: 8px; }
 .foot-inner .btn { flex: 1; }
+@media (max-width: 480px) { .foot-inner .btn { min-width: 0; padding: 0 8px; } }
 
 /* Sammanfattning */
 .stats { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--ink); }
