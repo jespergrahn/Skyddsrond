@@ -313,11 +313,12 @@ function renderInfo(rond) {
     platserEl.innerHTML = platserHtml(rond);
     setProgress(rond);
   };
-  floorsEl.onchange = applyFloors;
+  floorsEl.oninput = applyFloors;
   app.querySelector("#quick").onsubmit = (e) => {
     e.preventDefault();
-    const n = Math.min(60, Math.max(1, parseInt(e.target.querySelector("input").value, 10) || 0));
-    if (!n) return;
+    const input = e.target.querySelector("input");
+    const n = Math.min(60, parseInt(input.value, 10) || 0);
+    if (n < 1) { input.focus(); return; }
     floorsEl.value = Array.from({ length: n }, (_, k) => `Våning ${k + 1}`).join("\n");
     applyFloors();
   };
