@@ -1,26 +1,33 @@
 // Skyddsrond – all logik. Se SPEC.md för krav-ID:n (F-xx).
 
 const STORE_KEY = "skyddsrond.v1";
+const BUILDING_KEY = "skyddsrond.byggnad"; // F-27
 const STATUS = { ok: "OK", brist: "Brist", na: "Ej aktuellt" };
 const RISK = ["låg", "medel", "hög"]; // F-07, samma skala som Prevent
+const KONTOR = "kontor";
+const PLATSER = CHECKLIST.filter((a) => a.slag === "plats");
 
 const app = document.getElementById("app");
 const progressEl = document.getElementById("progress");
 const meterEl = document.querySelector("#meter span");
+const openAreas = new Set(); // utfällda områden, "<enhet>/<omradeId>"
 
 // ---------- Lagring (F-20) ----------
 
-function load() {
-  try { return JSON.parse(localStorage.getItem(STORE_KEY)) || { ronder: {} }; }
-  catch { return { ronder: {} }; }
+function readJson(key, fallback) {
+  try { return JSON.parse(localStorage.getItem(key)) || fallback; }
+  catch { return fallback; }
 }
 
-let db = load();
-
-function save() {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify(db)); }
+function writeJson(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); }
   catch { /* privat läge eller fullt – appen fungerar ändå under sessionen */ }
 }
+
+let db = readJson(STORE_KEY, { ronder: {} });
+Object.values(db.ronder).forEach(migrate);
+
+function save() { writeJson(STORE_KEY, db); }
 
 function touch(rond) {
   rond.uppdaterad = new Date().toISOString();
@@ -36,14 +43,20 @@ function today() {
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 }
 
+function defaultBuilding() {
+  return { vaningar: [{ id: uid(), namn: "Kontoret" }], platser: {} };
+}
+
 function newRond() {
   const id = uid();
   db.ronder[id] = {
     id,
+    version: 2,
     skapad: new Date().toISOString(),
     uppdaterad: new Date().toISOString(),
     status: "pågår",
-    info: { arbetsplats: "", plats: "", datum: today(), rondledare: "", skyddsombud: "", deltagare: "" },
+    info: { arbetsplats: "", datum: today(), rondledare: "", skyddsombud: "", deltagare: "" },
+    byggnad: readJson(BUILDING_KEY, null) || defaultBuilding(),
     svar: {},
     ejAktuellaOmraden: {},
     egnaRader: [],
@@ -53,31 +66,86 @@ function newRond() {
   return id;
 }
 
-// ---------- Hjälpfunktioner ----------
+// Ronder från v0.1–v0.4 saknar byggnad och har svar per rad-ID (SPEC.md §8)
+function migrate(rond) {
+  if (rond.version === 2) return;
+  const v = { id: uid(), namn: rond.info.plats || "Kontoret" };
+  const byggnad = { vaningar: [v], platser: {} };
+  const areaOfRow = {};
+  CHECKLIST.forEach((a) => a.rader.forEach((r) => { areaOfRow[r.id] = a; }));
+  const enhetFor = (area) => {
+    if (area.slag === "plats") byggnad.platser[area.id] = v.id;
+    return area.slag === KONTOR ? KONTOR : v.id;
+  };
+
+  const svar = {};
+  Object.entries(rond.svar || {}).forEach(([radId, s]) => {
+    const area = areaOfRow[radId];
+    if (area) svar[`${enhetFor(area)}/${radId}`] = { ...s, risk: s.risk || s.prioritet };
+  });
+  const ejAktuella = {};
+  Object.keys(rond.ejAktuellaOmraden || {}).forEach((areaId) => {
+    const area = CHECKLIST.find((a) => a.id === areaId);
+    if (area) ejAktuella[`${enhetFor(area)}/${areaId}`] = true;
+  });
+  const egnaRader = (rond.egnaRader || []).flatMap((r) => {
+    const area = CHECKLIST.find((a) => a.id === r.omradeId);
+    if (!area) return [];
+    const enhet = enhetFor(area);
+    const old = rond.svar?.[r.id];
+    if (old) svar[`${enhet}/${r.id}`] = old;
+    return [{ ...r, enhet }];
+  });
+
+  Object.assign(rond, { version: 2, byggnad, svar, ejAktuellaOmraden: ejAktuella, egnaRader });
+  delete rond.info.plats;
+}
+
+// ---------- Modell ----------
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
-function areaRows(rond, area) {
-  return area.rader.map((r) => ({ ...r, omradeId: area.id }))
-    .concat(rond.egnaRader.filter((r) => r.omradeId === area.id).map((r) => ({ ...r, egen: true })));
+// Enhet = "kontor" (gemensamt) eller en våning
+function units(rond) {
+  return [{ id: KONTOR, namn: "Gemensamt för kontoret" }, ...rond.byggnad.vaningar];
+}
+
+function unitName(rond, enhet) {
+  return units(rond).find((u) => u.id === enhet)?.namn || "";
+}
+
+function areasFor(rond, enhet) {
+  if (enhet === KONTOR) return CHECKLIST.filter((a) => a.slag === "kontor");
+  return CHECKLIST.filter((a) => a.slag === "vaning" || (a.slag === "plats" && rond.byggnad.platser[a.id] === enhet));
+}
+
+function areaRows(rond, enhet, area) {
+  const base = { enhet, omradeId: area.id };
+  return area.rader.map((r) => ({ ...r, ...base, key: `${enhet}/${r.id}` }))
+    .concat(rond.egnaRader
+      .filter((r) => r.enhet === enhet && r.omradeId === area.id)
+      .map((r) => ({ ...r, ...base, key: `${enhet}/${r.id}`, egen: true })));
+}
+
+function unitRows(rond, enhet) {
+  return areasFor(rond, enhet).flatMap((a) => areaRows(rond, enhet, a).map((r) => ({ ...r, omrade: a })));
 }
 
 function allRows(rond) {
-  return CHECKLIST.flatMap((a) => areaRows(rond, a).map((r) => ({ ...r, omrade: a })));
+  return units(rond).flatMap((u) => unitRows(rond, u.id).map((r) => ({ ...r, enhetNamn: u.namn })));
 }
 
 // F-24: ett område markerat som ej aktuellt gäller före radens eget svar
-function areaNA(rond, areaId) {
-  return !!rond.ejAktuellaOmraden?.[areaId];
+function areaNA(rond, enhet, areaId) {
+  return !!rond.ejAktuellaOmraden[`${enhet}/${areaId}`];
 }
 
 function statusOf(rond, row) {
-  return areaNA(rond, row.omradeId) ? "na" : rond.svar[row.id]?.status || null;
+  return areaNA(rond, row.enhet, row.omradeId) ? "na" : rond.svar[row.key]?.status || null;
 }
 
-// Ronder från v0.1 har "prioritet" i stället för "risk"
 function riskOf(s) {
-  return s.risk || s.prioritet || "medel";
+  return s.risk || "medel";
 }
 
 function counts(rond, rows = allRows(rond)) {
@@ -90,13 +158,20 @@ function counts(rond, rows = allRows(rond)) {
 function bristList(rond) {
   return allRows(rond)
     .filter((r) => statusOf(rond, r) === "brist")
-    .map((r) => ({ ...r, s: rond.svar[r.id] }))
+    .map((r) => ({ ...r, s: rond.svar[r.key] }))
     .sort((a, b) => RISK.indexOf(riskOf(b.s)) - RISK.indexOf(riskOf(a.s)));
 }
 
-function fmtDate(iso) {
-  return iso ? new Date(iso).toLocaleDateString("sv-SE") : "";
+// Sammanfattat läge för ett område: "na", "tom", "brist", "ok" eller "delvis"
+function areaState(rond, enhet, area) {
+  if (areaNA(rond, enhet, area.id)) return "na";
+  const c = counts(rond, areaRows(rond, enhet, area));
+  if (c.brist) return "brist";
+  if (!c.klara) return "tom";
+  return c.tom ? "delvis" : "ok";
 }
+
+function plural(n, en, flera) { return `${n} ${n === 1 ? en : flera}`; }
 
 function setProgress(rond) {
   if (!rond) { progressEl.textContent = ""; meterEl.style.width = "0"; return; }
@@ -109,26 +184,54 @@ function foot(html) {
   return `<div class="foot"><div class="foot-inner">${html}</div></div>`;
 }
 
+// ---------- Byggnad (F-25 – F-27) ----------
+
+function setFloors(rond, names) {
+  names = names.map((n) => n.trim()).filter(Boolean);
+  if (!names.length) names = ["Kontoret"];
+  const old = rond.byggnad.vaningar;
+  const used = new Set();
+  // Behåll ID för våningar med samma namn, annars samma position – så att svar inte tappas vid småändringar
+  const vaningar = names.map((namn, i) => {
+    let match = old.find((v) => v.namn === namn && !used.has(v.id));
+    if (!match && old[i] && !used.has(old[i].id) && !names.includes(old[i].namn)) match = old[i];
+    const id = match ? match.id : uid();
+    used.add(id);
+    return { id, namn };
+  });
+  Object.keys(rond.byggnad.platser).forEach((k) => {
+    if (!used.has(rond.byggnad.platser[k])) rond.byggnad.platser[k] = null;
+  });
+  rond.byggnad.vaningar = vaningar;
+  saveBuilding(rond);
+}
+
+function saveBuilding(rond) {
+  writeJson(BUILDING_KEY, rond.byggnad);
+  touch(rond);
+}
+
 // ---------- Routing ----------
 // #/                      start
-// #/r/<id>/info           uppgifter om ronden
-// #/r/<id>/o/<index>      område
+// #/r/<id>/info           uppgifter och byggnad
 // #/r/<id>/oversikt       översikt
+// #/r/<id>/e/<enhet>      gemensamt eller en våning
 // #/r/<id>/klar           sammanfattning
 
 function go(hash) { location.hash = hash; }
 
 function route() {
-  const [, , id, view, idx] = location.hash.split("/");
+  const [, , id, view, arg] = location.hash.split("/");
   const rond = id && db.ronder[id];
+  app.onclick = app.oninput = app.onsubmit = null;
   window.scrollTo(0, 0);
   if (!rond) return renderHome();
   setProgress(rond);
   if (view === "info") return renderInfo(rond);
-  if (view === "o") return renderArea(rond, Math.max(0, Math.min(CHECKLIST.length - 1, +idx || 0)));
   if (view === "oversikt") return renderOverview(rond);
+  if (view === "e" && units(rond).some((u) => u.id === arg)) return renderUnit(rond, arg);
   if (view === "klar") return renderSummary(rond);
-  renderHome();
+  go(`#/r/${rond.id}/oversikt`);
 }
 
 window.addEventListener("hashchange", route);
@@ -141,13 +244,14 @@ function renderHome() {
   const ronder = Object.values(db.ronder).sort((a, b) => b.uppdaterad.localeCompare(a.uppdaterad));
   app.innerHTML = `
     <h1>Skyddsrond</h1>
-    <p class="lead">Gå runt, bedöm rad för rad och exportera protokollet som PDF.</p>
+    <p class="lead">Gå runt våning för våning, bedöm och exportera protokollet som PDF.</p>
     <button class="btn primary block" data-act="new">Ny skyddsrond</button>
     ${ronder.length ? `<h2>Tidigare ronder</h2><ul class="list">${ronder.map((r) => {
       const c = counts(r);
+      const n = r.byggnad.vaningar.length;
       return `<li><button data-open="${r.id}">
-        <span>${esc(r.info.arbetsplats || "Namnlös")}<br><span class="meta">${esc(r.info.datum)} · ${r.status === "klar" ? "Klar" : `${c.klara}/${c.total}`}</span></span>
-        <span class="meta ${c.brist ? "flag" : ""}">${c.brist} brist${c.brist === 1 ? "" : "er"}</span>
+        <span>${esc(r.info.arbetsplats || "Namnlös")}<br><span class="meta">${esc(r.info.datum)} · ${n > 1 ? `${n} våningar · ` : ""}${r.status === "klar" ? "Klar" : `${c.klara}/${c.total}`}</span></span>
+        ${c.brist ? `<span class="flag">${plural(c.brist, "brist", "brister")}</span>` : `<span class="meta">Inga brister</span>`}
       </button></li>`;
     }).join("")}</ul>` : ""}
     <p class="note">Allt sparas automatiskt i den här webbläsaren. Rensas webbläsardata försvinner ronderna, så exportera PDF när du är klar.</p>`;
@@ -156,9 +260,17 @@ function renderHome() {
   app.querySelectorAll("[data-open]").forEach((b) => {
     b.onclick = () => {
       const r = db.ronder[b.dataset.open];
-      go(r.status === "klar" ? `#/r/${r.id}/klar` : counts(r).klara ? `#/r/${r.id}/oversikt` : `#/r/${r.id}/info`);
+      go(`#/r/${r.id}/${r.status === "klar" ? "klar" : counts(r).klara ? "oversikt" : "info"}`);
     };
   });
+}
+
+function platserHtml(rond) {
+  return PLATSER.map((a) => `
+    <label class="field"><span>${esc(a.titel)}</span><select data-plats="${a.id}">
+      <option value="">Finns inte</option>
+      ${rond.byggnad.vaningar.map((v) => `<option value="${v.id}" ${rond.byggnad.platser[a.id] === v.id ? "selected" : ""}>${esc(v.namn)}</option>`).join("")}
+    </select></label>`).join("");
 }
 
 function renderInfo(rond) {
@@ -169,12 +281,23 @@ function renderInfo(rond) {
     <p class="eyebrow">Uppgifter</p>
     <h1>Om ronden</h1>
     <p class="lead">Arbetsplats och datum krävs.</p>
-    ${f("arbetsplats", "Arbetsplats *")}
-    <div class="grid2">${f("plats", "Plats / våning")}${f("datum", "Datum *", "date")}</div>
+    <div class="grid2">${f("arbetsplats", "Arbetsplats *")}${f("datum", "Datum *", "date")}</div>
     <div class="grid2">${f("rondledare", "Rondledare")}${f("skyddsombud", "Skyddsombud")}</div>
     <label class="field"><span>Övriga deltagare</span><textarea data-info="deltagare">${esc(i.deltagare)}</textarea></label>
-    <button class="link" data-act="del">Ta bort ronden</button>
-    ${foot(`<button class="btn primary" data-act="start">${counts(rond).klara ? "Fortsätt" : "Starta rond"}</button>`)}`;
+
+    <h2>Byggnad</h2>
+    <p class="hint">Sparas till nästa rond.</p>
+    <label class="field"><span>Våningar, en per rad</span><textarea id="floors" rows="6">${esc(rond.byggnad.vaningar.map((v) => v.namn).join("\n"))}</textarea></label>
+    <form class="quick" id="quick">
+      <span>Snabbval:</span>
+      <input type="number" min="1" max="60" inputmode="numeric" placeholder="14" aria-label="Antal våningar">
+      <button class="link">Fyll i Våning 1–N</button>
+    </form>
+    <h2>Var finns</h2>
+    <div class="grid2" id="platser">${platserHtml(rond)}</div>
+
+    <p><button class="link" data-act="del">Ta bort ronden</button></p>
+    ${foot(`<button class="btn primary" data-act="start">${counts(rond).klara ? "Till översikten" : "Starta rond"}</button>`)}`;
 
   const startBtn = app.querySelector("[data-act=start]");
   const valid = () => { startBtn.disabled = !(i.arbetsplats.trim() && i.datum); };
@@ -182,14 +305,66 @@ function renderInfo(rond) {
   app.querySelectorAll("[data-info]").forEach((el) => {
     el.oninput = () => { i[el.dataset.info] = el.value; touch(rond); valid(); };
   });
-  startBtn.onclick = () => go(`#/r/${rond.id}/${counts(rond).klara ? "oversikt" : "o/0"}`);
+
+  const floorsEl = app.querySelector("#floors");
+  const platserEl = app.querySelector("#platser");
+  const applyFloors = () => {
+    setFloors(rond, floorsEl.value.split("\n"));
+    platserEl.innerHTML = platserHtml(rond);
+    setProgress(rond);
+  };
+  floorsEl.onchange = applyFloors;
+  app.querySelector("#quick").onsubmit = (e) => {
+    e.preventDefault();
+    const n = Math.min(60, Math.max(1, parseInt(e.target.querySelector("input").value, 10) || 0));
+    if (!n) return;
+    floorsEl.value = Array.from({ length: n }, (_, k) => `Våning ${k + 1}`).join("\n");
+    applyFloors();
+  };
+  platserEl.onchange = (e) => {
+    const sel = e.target.closest("[data-plats]");
+    if (!sel) return;
+    rond.byggnad.platser[sel.dataset.plats] = sel.value || null;
+    saveBuilding(rond);
+    setProgress(rond);
+  };
+
+  startBtn.onclick = () => { applyFloors(); go(`#/r/${rond.id}/oversikt`); };
   app.querySelector("[data-act=del]").onclick = () => {
     if (confirm("Ta bort ronden? Det går inte att ångra.")) { delete db.ronder[rond.id]; save(); go("#/"); }
   };
 }
 
+function dotsHtml(rond, enhet) {
+  return `<span class="dots" aria-hidden="true">${areasFor(rond, enhet)
+    .map((a) => `<i class="dot ${areaState(rond, enhet, a)}"></i>`).join("")}</span>`;
+}
+
+function renderOverview(rond) {
+  const c = counts(rond);
+  const list = units(rond);
+  app.innerHTML = `
+    <p class="eyebrow">${esc(rond.info.arbetsplats)} · ${esc(rond.info.datum)}</p>
+    <h1>Översikt</h1>
+    <p class="lead">${c.klara} av ${c.total} punkter bedömda${c.brist ? ` · ${plural(c.brist, "brist", "brister")}` : ""}.</p>
+    <ul class="list">${list.map((u, k) => {
+      const uc = counts(rond, unitRows(rond, u.id));
+      return `<li${k === 0 && list.length > 1 ? ` class="sep"` : ""}><button data-u="${u.id}">
+        <span>${esc(u.namn)}<br>${dotsHtml(rond, u.id)}</span>
+        <span class="meta">${uc.brist ? `<span class="flag">${plural(uc.brist, "brist", "brister")}</span> ` : ""}${uc.klara}/${uc.total}</span>
+      </button></li>`;
+    }).join("")}</ul>
+    <p class="legend"><i class="dot ok"></i> Klar <i class="dot brist"></i> Brist <i class="dot delvis"></i> Påbörjad <i class="dot tom"></i> Kvar</p>
+    <p><button class="link" data-act="info">Ändra uppgifter och byggnad</button></p>
+    ${foot(`<button class="btn primary" data-act="sum">Sammanfatta</button>`)}`;
+
+  app.querySelectorAll("[data-u]").forEach((b) => { b.onclick = () => go(`#/r/${rond.id}/e/${b.dataset.u}`); });
+  app.querySelector("[data-act=info]").onclick = () => go(`#/r/${rond.id}/info`);
+  app.querySelector("[data-act=sum]").onclick = () => go(`#/r/${rond.id}/klar`);
+}
+
 function rowHtml(rond, r) {
-  const s = rond.svar[r.id] || {};
+  const s = rond.svar[r.key] || {};
   const seg = Object.entries(STATUS).map(([v, label]) =>
     `<button type="button" data-v="${v}" aria-pressed="${s.status === v}">${label}</button>`).join("");
   const field = (k, label, type = "text") =>
@@ -213,7 +388,7 @@ function rowHtml(rond, r) {
   if (s.status !== "brist" && !s.kommentar && !s.visaKommentar) links.push(`<button class="link" data-act="comment">Lägg till kommentar</button>`);
   if (r.egen) links.push(`<button class="link" data-act="remove">Ta bort rad</button>`);
 
-  return `<div class="row" data-row="${r.id}">
+  return `<div class="row" data-row="${r.key}">
     <p class="row-text">${esc(r.text)}</p>
     <div class="seg" role="group" aria-label="Bedömning">${seg}</div>
     ${more}
@@ -221,117 +396,127 @@ function rowHtml(rond, r) {
   </div>`;
 }
 
-function renderArea(rond, idx) {
-  const area = CHECKLIST[idx];
-  const last = idx === CHECKLIST.length - 1;
-  const na = areaNA(rond, area.id);
+// F-28: ett område som block med Allt OK / Gå igenom
+function areaHtml(rond, enhet, area) {
+  const rows = areaRows(rond, enhet, area);
+  const na = areaNA(rond, enhet, area.id);
+  const c = counts(rond, rows);
+  const open = !na && (openAreas.has(`${enhet}/${area.id}`) || c.brist > 0);
+  const state = na ? "Ej aktuellt"
+    : c.brist ? `<span class="flag">${plural(c.brist, "brist", "brister")}</span>`
+    : c.tom ? `${c.klara}/${c.total}` : "✓ Klart";
+
+  return `<section class="area${open ? " open" : ""}" data-area="${area.id}">
+    <div class="area-head"><h3>${esc(area.titel)}</h3><span class="meta">${state}</span></div>
+    ${na ? `<div class="area-actions"><button class="btn" data-act="na">Ångra ej aktuellt</button></div>` : `
+      <div class="area-actions">
+        <button class="btn" data-act="allok" ${c.tom ? "" : "disabled"}>Allt OK</button>
+        <button class="btn" data-act="toggle" ${c.brist ? "disabled" : ""}>${open ? "Dölj" : "Gå igenom"}</button>
+      </div>
+      ${open ? `<div class="rows">
+        ${rows.map((r) => rowHtml(rond, r)).join("")}
+        <form class="add"><input placeholder="Lägg till egen punkt" aria-label="Lägg till egen punkt"><button class="btn">Lägg till</button></form>
+      </div>` : ""}
+      <button class="link small" data-act="na">Ej aktuellt här</button>`}
+  </section>`;
+}
+
+function renderUnit(rond, enhet) {
+  const list = units(rond);
+  const idx = list.findIndex((u) => u.id === enhet);
+  const last = idx === list.length - 1;
+  const areas = areasFor(rond, enhet);
+  const eyebrow = enhet === KONTOR ? "Görs en gång" : `Våning ${idx} av ${list.length - 1}`;
+
   app.innerHTML = `
-    <p class="eyebrow">Område ${idx + 1} av ${CHECKLIST.length}</p>
-    <h1>${esc(area.titel)}</h1>
-    ${na ? `
-      <p class="lead">Ej aktuellt för arbetsplatsen. Alla punkter räknas som ej aktuella.</p>
-      <button class="btn" data-act="area-na">Ångra och bedöm området</button>` : `
-      <p class="lead"><span id="area-count"></span><br><button class="link" data-act="area-na">Hela området är ej aktuellt</button></p>
-      <div id="rows">${areaRows(rond, area).map((r) => rowHtml(rond, r)).join("")}</div>
-      <form class="add" id="add"><input placeholder="Lägg till egen punkt" aria-label="Lägg till egen punkt"><button class="btn">Lägg till</button></form>`}
+    <p class="eyebrow">${eyebrow}</p>
+    <h1>${esc(unitName(rond, enhet))}</h1>
+    <p class="lead" id="unit-count"></p>
+    <div id="areas">${areas.map((a) => areaHtml(rond, enhet, a)).join("")}</div>
     ${foot(`
       <button class="btn" data-act="prev" ${idx === 0 ? "disabled" : ""}>Föregående</button>
       <button class="btn" data-act="overview">Översikt</button>
       <button class="btn primary" data-act="next">${last ? "Sammanfatta" : "Nästa"}</button>`)}`;
 
-  app.querySelector("[data-act=prev]").onclick = () => go(`#/r/${rond.id}/o/${idx - 1}`);
-  app.querySelector("[data-act=overview]").onclick = () => go(`#/r/${rond.id}/oversikt`);
-  app.querySelector("[data-act=next]").onclick = () => go(last ? `#/r/${rond.id}/klar` : `#/r/${rond.id}/o/${idx + 1}`);
-  // F-24: radernas svar ligger kvar, så det går att ångra
-  app.querySelector("[data-act=area-na]").onclick = () => {
-    rond.ejAktuellaOmraden ||= {};
-    if (na) delete rond.ejAktuellaOmraden[area.id];
-    else rond.ejAktuellaOmraden[area.id] = true;
-    touch(rond);
-    route();
-  };
-  if (na) return;
-
   const updateCount = () => {
-    const c = counts(rond, areaRows(rond, area));
-    app.querySelector("#area-count").textContent = `${c.klara} av ${c.total} bedömda${c.brist ? ` · ${c.brist} brist${c.brist === 1 ? "" : "er"}` : ""}`;
+    const c = counts(rond, unitRows(rond, enhet));
+    app.querySelector("#unit-count").textContent =
+      `${c.klara} av ${c.total} bedömda${c.brist ? ` · ${plural(c.brist, "brist", "brister")}` : ""}`;
     setProgress(rond);
   };
   updateCount();
 
-  const rowsEl = app.querySelector("#rows");
-  const rerenderRow = (rowEl, r) => { rowEl.outerHTML = rowHtml(rond, r); };
-  const findRow = (id) => areaRows(rond, area).find((r) => r.id === id);
+  const refresh = (sec, area, focusKey) => {
+    sec.outerHTML = areaHtml(rond, enhet, area);
+    if (focusKey) app.querySelector(`[data-row="${focusKey}"] textarea`)?.focus();
+    updateCount();
+  };
 
-  rowsEl.addEventListener("click", (e) => {
-    const rowEl = e.target.closest("[data-row]");
-    if (!rowEl) return;
-    const id = rowEl.dataset.row;
-    const s = (rond.svar[id] ||= {});
+  app.querySelector("[data-act=prev]").onclick = () => go(`#/r/${rond.id}/e/${list[idx - 1].id}`);
+  app.querySelector("[data-act=overview]").onclick = () => go(`#/r/${rond.id}/oversikt`);
+  app.querySelector("[data-act=next]").onclick = () => go(last ? `#/r/${rond.id}/klar` : `#/r/${rond.id}/e/${list[idx + 1].id}`);
+
+  app.onclick = (e) => {
     const btn = e.target.closest("button");
-    if (!btn) return;
+    const sec = btn?.closest("[data-area]");
+    if (!sec || btn.type === "submit" && btn.closest("form")) return;
+    const area = areas.find((a) => a.id === sec.dataset.area);
+    const areaKey = `${enhet}/${area.id}`;
+    const rowEl = btn.closest("[data-row]");
+    let focusKey = null;
 
-    if (btn.dataset.v) {
-      s.status = s.status === btn.dataset.v ? null : btn.dataset.v; // F-06
-      if (s.status === "brist" && !s.risk) s.risk = riskOf(s);
-    } else if (btn.dataset.act === "comment") {
-      s.visaKommentar = true;
-    } else if (btn.dataset.act === "remove") {
-      if (!confirm("Ta bort punkten?")) return;
-      rond.egnaRader = rond.egnaRader.filter((r) => r.id !== id);
-      delete rond.svar[id];
-      touch(rond);
-      rowEl.remove();
-      return updateCount();
+    if (rowEl) {
+      const key = rowEl.dataset.row;
+      const s = (rond.svar[key] ||= {});
+      if (btn.dataset.v) {
+        s.status = s.status === btn.dataset.v ? null : btn.dataset.v; // F-06
+        if (s.status === "brist" && !s.risk) s.risk = "medel";
+      } else if (btn.dataset.act === "comment") {
+        s.visaKommentar = true;
+        focusKey = key;
+      } else if (btn.dataset.act === "remove") {
+        if (!confirm("Ta bort punkten?")) return;
+        const radId = key.slice(enhet.length + 1);
+        rond.egnaRader = rond.egnaRader.filter((r) => !(r.enhet === enhet && r.id === radId));
+        delete rond.svar[key];
+      } else return;
+    } else if (btn.dataset.act === "allok") {
+      areaRows(rond, enhet, area).forEach((r) => {
+        if (!statusOf(rond, r)) (rond.svar[r.key] ||= {}).status = "ok";
+      });
+      openAreas.delete(areaKey);
+    } else if (btn.dataset.act === "toggle") {
+      if (openAreas.has(areaKey)) openAreas.delete(areaKey); else openAreas.add(areaKey);
+    } else if (btn.dataset.act === "na") {
+      if (rond.ejAktuellaOmraden[areaKey]) delete rond.ejAktuellaOmraden[areaKey];
+      else rond.ejAktuellaOmraden[areaKey] = true;
     } else return;
 
     touch(rond);
-    rerenderRow(rowEl, findRow(id));
-    if (btn.dataset.act === "comment") rowsEl.querySelector(`[data-row="${id}"] textarea`)?.focus();
-    updateCount();
-  });
+    refresh(sec, area, focusKey);
+  };
 
-  rowsEl.addEventListener("input", (e) => {
+  app.oninput = (e) => {
     const k = e.target.dataset.k;
     if (!k) return;
-    const id = e.target.closest("[data-row]").dataset.row;
-    (rond.svar[id] ||= {})[k] = e.target.value;
+    const key = e.target.closest("[data-row]").dataset.row;
+    (rond.svar[key] ||= {})[k] = e.target.value;
     touch(rond);
-  });
+  };
 
-  app.querySelector("#add").onsubmit = (e) => {
+  app.onsubmit = (e) => {
     e.preventDefault();
+    const sec = e.target.closest("[data-area]");
     const input = e.target.querySelector("input");
     const text = input.value.trim();
-    if (!text) return;
-    const r = { id: "egen-" + uid(), omradeId: area.id, text };
-    rond.egnaRader.push(r);
+    if (!sec || !text) return;
+    const area = areas.find((a) => a.id === sec.dataset.area);
+    rond.egnaRader.push({ id: "egen-" + uid(), enhet, omradeId: area.id, text });
+    openAreas.add(`${enhet}/${area.id}`);
     touch(rond);
-    rowsEl.insertAdjacentHTML("beforeend", rowHtml(rond, { ...r, egen: true }));
-    input.value = "";
-    updateCount();
+    refresh(sec, area);
+    app.querySelector(`[data-area="${area.id}"] .add input`)?.focus();
   };
-}
-
-function renderOverview(rond) {
-  const c = counts(rond);
-  app.innerHTML = `
-    <p class="eyebrow">${esc(rond.info.arbetsplats)} · ${esc(rond.info.datum)}</p>
-    <h1>Översikt</h1>
-    <p class="lead">${c.klara} av ${c.total} punkter bedömda.</p>
-    <ul class="list">${CHECKLIST.map((a, i) => {
-      const ac = counts(rond, areaRows(rond, a));
-      return `<li><button data-i="${i}">
-        <span>${esc(a.titel)}</span>
-        <span class="meta">${areaNA(rond, a.id) ? "Ej aktuellt" : `${ac.brist ? `<span class="flag">${ac.brist} !</span> · ` : ""}${ac.klara}/${ac.total}`}</span>
-      </button></li>`;
-    }).join("")}</ul>
-    <p><button class="link" data-act="info">Ändra uppgifter om ronden</button></p>
-    ${foot(`<button class="btn primary" data-act="sum">Sammanfatta</button>`)}`;
-
-  app.querySelectorAll("[data-i]").forEach((b) => { b.onclick = () => go(`#/r/${rond.id}/o/${b.dataset.i}`); });
-  app.querySelector("[data-act=info]").onclick = () => go(`#/r/${rond.id}/info`);
-  app.querySelector("[data-act=sum]").onclick = () => go(`#/r/${rond.id}/klar`);
 }
 
 function renderSummary(rond) {
@@ -352,7 +537,7 @@ function renderSummary(rond) {
 
     <h2>Handlingsplan</h2>
     ${brister.length ? `<ul class="plan">${brister.map((b) => `<li>
-      <span class="prio">Risk ${esc(riskOf(b.s))}</span> <span class="sub">· ${esc(b.omrade.titel)}</span>
+      <span class="prio">Risk ${esc(riskOf(b.s))}</span> <span class="sub">· ${esc(b.enhetNamn)} · ${esc(b.omrade.titel)}</span>
       <p><b>${esc(b.text)}</b></p>
       ${b.s.kommentar ? `<p>${esc(b.s.kommentar)}</p>` : ""}
       ${b.s.atgard ? `<p>Åtgärd: ${esc(b.s.atgard)}</p>` : ""}
@@ -365,7 +550,7 @@ function renderSummary(rond) {
 
     <div class="actions">
       <button class="btn primary block" data-act="pdf">Exportera PDF</button>
-      <button class="btn block" data-act="back">Tillbaka till ronden</button>
+      <button class="btn block" data-act="back">Tillbaka till översikten</button>
     </div>`;
 
   app.querySelectorAll("[data-sum]").forEach((el) => {
@@ -379,11 +564,33 @@ function renderSummary(rond) {
   };
 }
 
-// ---------- PDF (F-16 – F-19) ----------
+// ---------- PDF (F-16 – F-19, F-30) ----------
 
 function fileName(rond) {
   const plats = (rond.info.arbetsplats || "kontor").trim().replace(/[^\wåäöÅÄÖ-]+/g, "_");
   return `Skyddsrond_${plats}_${rond.info.datum || today()}.pdf`;
+}
+
+function buildingText(rond) {
+  const v = rond.byggnad.vaningar;
+  return v.length === 1 ? v[0].namn : `${v.length} våningar (${v[0].namn} – ${v[v.length - 1].namn})`;
+}
+
+function placesText(rond) {
+  return PLATSER.map((a) => `${a.titel}: ${unitName(rond, rond.byggnad.platser[a.id]) || "finns inte"}`).join(" · ");
+}
+
+// F-30: kort sammanfattning av ett område på en våning
+function areaSummary(rond, enhet, area) {
+  const rows = areaRows(rond, enhet, area);
+  if (areaNA(rond, enhet, area.id)) return { label: "Ej aktuellt", avvikelser: [] };
+  const c = counts(rond, rows);
+  const avvikelser = rows.filter((r) => statusOf(rond, r) !== "ok" || rond.svar[r.key]?.kommentar)
+    .map((r) => ({ r, s: rond.svar[r.key] || {}, status: statusOf(rond, r) }));
+  if (!c.klara) return { label: "Ej bedömt", avvikelser: [] };
+  if (!avvikelser.length) return { label: "Allt OK", avvikelser };
+  const label = c.brist ? plural(c.brist, "brist", "brister") : c.tom ? `${c.tom} ej bedömda` : "OK, med kommentar";
+  return { label, avvikelser, ovrigaOk: c.ok - avvikelser.filter((a) => a.status === "ok").length };
 }
 
 function exportPdf(rond) {
@@ -393,11 +600,11 @@ function exportPdf(rond) {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const W = 210, H = 297, M = 18, CW = W - M * 2;
   // Tres palett, se SPEC.md §7
-  const BRAND = [255, 92, 0], ACCENT = [250, 32, 143], MUTED = [110, 110, 110], LINE = [239, 239, 239];
+  const BRAND = [255, 92, 0], ACCENT = [250, 32, 143], MUTED = [110, 110, 110], LINE = [239, 239, 239], INK = [0, 0, 0];
   let y = M;
 
   const ensure = (h) => { if (y + h > H - M - 8) { doc.addPage(); y = M; } };
-  const text = (str, { size = 10, bold = false, color = [0, 0, 0], x = M, w = CW, gap = 1.5 } = {}) => {
+  const text = (str, { size = 10, bold = false, color = INK, x = M, w = CW, gap = 1.5 } = {}) => {
     doc.setFont("helvetica", bold ? "bold" : "normal");
     doc.setFontSize(size);
     doc.setTextColor(...color);
@@ -406,8 +613,15 @@ function exportPdf(rond) {
     lines.forEach((ln) => { ensure(lh); doc.text(ln, x, y + lh * 0.8); y += lh; });
     y += gap;
   };
+  const right = (str, { size = 9, bold = false, color = INK } = {}) => {
+    doc.setFont("helvetica", bold ? "bold" : "normal");
+    doc.setFontSize(size);
+    doc.setTextColor(...color);
+    doc.text(str, W - M, y + 3, { align: "right" });
+  };
   const rule = (color = LINE) => { doc.setDrawColor(...color); doc.setLineWidth(0.2); doc.line(M, y, W - M, y); y += 3; };
-  const heading = (str) => { y += 4; ensure(14); text(str.toUpperCase(), { size: 8, bold: true, color: MUTED, gap: 1 }); rule([0, 0, 0]); };
+  const heading = (str) => { y += 4; ensure(14); text(str.toUpperCase(), { size: 8, bold: true, color: MUTED, gap: 1 }); rule(INK); };
+  const statusColor = (st) => (st === "brist" ? ACCENT : st === "ok" ? INK : MUTED);
 
   const i = rond.info;
   const c = counts(rond);
@@ -421,11 +635,11 @@ function exportPdf(rond) {
   doc.rect(M, y, 14, 1.6, "F");
   y += 5;
   text("Skyddsrond", { size: 26, bold: true, gap: 1 });
-  text([i.arbetsplats, i.plats].filter(Boolean).join(", ") + "  ·  " + i.datum, { size: 11, color: MUTED, gap: 6 });
+  text(`${i.arbetsplats}  ·  ${i.datum}`, { size: 11, color: MUTED, gap: 6 });
 
   // Uppgifter
   heading("Uppgifter");
-  [["Arbetsplats", i.arbetsplats], ["Plats / våning", i.plats], ["Datum", i.datum],
+  [["Arbetsplats", i.arbetsplats], ["Datum", i.datum], ["Byggnad", buildingText(rond)], ["Platser", placesText(rond)],
    ["Rondledare", i.rondledare], ["Skyddsombud", i.skyddsombud], ["Övriga deltagare", i.deltagare]]
     .forEach(([k, v]) => {
       const startY = y;
@@ -439,11 +653,10 @@ function exportPdf(rond) {
   // Sammanfattning
   heading("Sammanfattning");
   ensure(16);
-  const cols = [["OK", c.ok], ["Brister", c.brist], ["Ej aktuellt", c.na], ["Ej bedömda", c.tom]];
-  cols.forEach(([label, n], k) => {
+  [["OK", c.ok], ["Brister", c.brist], ["Ej aktuellt", c.na], ["Ej bedömda", c.tom]].forEach(([label, n], k) => {
     const x = M + k * (CW / 4);
     doc.setFont("helvetica", "bold"); doc.setFontSize(20);
-    doc.setTextColor(...(label === "Brister" && n ? ACCENT : [0, 0, 0]));
+    doc.setTextColor(...(label === "Brister" && n ? ACCENT : INK));
     doc.text(String(n), x, y + 7);
     doc.setFont("helvetica", "normal"); doc.setFontSize(8); doc.setTextColor(...MUTED);
     doc.text(label, x, y + 12);
@@ -459,29 +672,47 @@ function exportPdf(rond) {
   brister.forEach((b, n) => {
     ensure(22);
     text(`${n + 1}. ${b.text}`, { size: 10, bold: true, gap: 0.5 });
-    text(`Risk: ${riskOf(b.s)}   ·   ${b.omrade.titel}`, { size: 8, color: ACCENT, gap: 1 });
+    text(`Risk: ${riskOf(b.s)}   ·   ${b.enhetNamn}   ·   ${b.omrade.titel}`, { size: 8, color: ACCENT, gap: 1 });
     if (b.s.kommentar) text("Brist: " + b.s.kommentar, { size: 9, gap: 0.5 });
     if (b.s.atgard) text("Åtgärd: " + b.s.atgard, { size: 9, gap: 0.5 });
     text(`Ansvarig: ${b.s.ansvarig || "-"}   ·   Klart senast: ${b.s.klartSenast || "-"}`, { size: 9, color: MUTED, gap: 2 });
     rule();
   });
 
-  // Alla punkter
-  CHECKLIST.forEach((a) => {
-    heading(a.titel);
-    if (areaNA(rond, a.id)) return text("Ej aktuellt för arbetsplatsen", { size: 9, color: MUTED });
-    areaRows(rond, a).forEach((r) => {
-      const s = rond.svar[r.id] || {};
-      const label = STATUS[s.status] || "Ej bedömd";
+  // Gemensamt: alla rader
+  heading("Gemensamt för kontoret");
+  areasFor(rond, KONTOR).forEach((a) => {
+    ensure(10);
+    text(a.titel, { size: 9, bold: true, gap: 1 });
+    if (areaNA(rond, KONTOR, a.id)) return text("Ej aktuellt", { size: 9, color: MUTED });
+    areaRows(rond, KONTOR, a).forEach((r) => {
+      const st = statusOf(rond, r);
+      const s = rond.svar[r.key] || {};
       ensure(8);
-      const startY = y;
-      doc.setFont("helvetica", s.status === "brist" ? "bold" : "normal");
-      doc.setFontSize(9);
-      doc.setTextColor(...(s.status === "brist" ? ACCENT : s.status === "ok" ? [0, 0, 0] : MUTED));
-      doc.text(label, W - M, startY + 3, { align: "right" });
+      right(STATUS[st] || "Ej bedömd", { bold: st === "brist", color: statusColor(st) });
       text(r.text, { size: 9, w: CW - 30, gap: 0 });
-      if (s.kommentar && s.status !== "brist") text(s.kommentar, { size: 8, color: MUTED, x: M + 4, w: CW - 34, gap: 0 });
+      if (s.kommentar && st !== "brist") text(s.kommentar, { size: 8, color: MUTED, x: M + 4, w: CW - 34, gap: 0 });
       y += 1.5;
+    });
+    y += 1.5;
+  });
+
+  // Per våning: en rad per område (F-30)
+  rond.byggnad.vaningar.forEach((v) => {
+    heading(v.namn);
+    areasFor(rond, v.id).forEach((a) => {
+      const sum = areaSummary(rond, v.id, a);
+      ensure(7);
+      const st = sum.label === "Allt OK" ? "ok" : sum.avvikelser.some((x) => x.status === "brist") ? "brist" : "";
+      right(sum.label, { bold: st === "brist", color: statusColor(st) });
+      text(a.titel, { size: 9, w: CW - 40, gap: 0.5 });
+      sum.avvikelser.forEach(({ r, s, status }) => {
+        const label = STATUS[status] || "Ej bedömd";
+        text(`${label}: ${r.text}${s.kommentar ? ` - ${s.kommentar}` : ""}`,
+          { size: 8, color: status === "brist" ? ACCENT : MUTED, x: M + 4, w: CW - 44, gap: 0.3 });
+      });
+      if (sum.ovrigaOk) text("Övriga OK", { size: 8, color: MUTED, x: M + 4, gap: 0.3 });
+      y += 1.2;
     });
   });
 
@@ -513,21 +744,28 @@ function printFallback(rond) {
   const i = rond.info;
   const c = counts(rond);
   const brister = bristList(rond);
+  const rowsTable = (enhet, a) => `<table>${areaRows(rond, enhet, a).map((r) => {
+    const s = rond.svar[r.key] || {};
+    return `<tr><td>${esc(r.text)}${s.kommentar ? `<br><small>${esc(s.kommentar)}</small>` : ""}</td><td>${STATUS[statusOf(rond, r)] || "Ej bedömd"}</td></tr>`;
+  }).join("")}</table>`;
+
   document.getElementById("print").innerHTML = `
     <img src="assets/logo-svart.png" alt="Tre" style="float:right;height:48px">
     <h1>Skyddsrond</h1>
-    <p>${esc(i.arbetsplats)} ${i.plats ? "· " + esc(i.plats) : ""} · ${esc(i.datum)}</p>
+    <p>${esc(i.arbetsplats)} · ${esc(i.datum)} · ${esc(buildingText(rond))}</p>
     <p>Rondledare: ${esc(i.rondledare || "-")} · Skyddsombud: ${esc(i.skyddsombud || "-")}<br>Övriga: ${esc(i.deltagare || "-")}</p>
     <p><b>OK ${c.ok} · Brister ${c.brist} · Ej aktuellt ${c.na} · Ej bedömda ${c.tom}</b></p>
     ${rond.sammanfattning.kommentar ? `<p>${esc(rond.sammanfattning.kommentar)}</p>` : ""}
     <h2>Handlingsplan</h2>
-    ${brister.length ? `<table><tr><th>Punkt</th><th>Risk</th><th>Åtgärd</th><th>Ansvarig</th><th>Klart</th></tr>
-      ${brister.map((b) => `<tr><td>${esc(b.text)}<br><small>${esc(b.s.kommentar)}</small></td><td>${esc(riskOf(b.s))}</td><td>${esc(b.s.atgard)}</td><td>${esc(b.s.ansvarig)}</td><td>${esc(b.s.klartSenast)}</td></tr>`).join("")}
+    ${brister.length ? `<table><tr><th>Punkt</th><th>Var</th><th>Risk</th><th>Åtgärd</th><th>Ansvarig</th><th>Klart</th></tr>
+      ${brister.map((b) => `<tr><td>${esc(b.text)}<br><small>${esc(b.s.kommentar)}</small></td><td>${esc(b.enhetNamn)}</td><td>${esc(riskOf(b.s))}</td><td>${esc(b.s.atgard)}</td><td>${esc(b.s.ansvarig)}</td><td>${esc(b.s.klartSenast)}</td></tr>`).join("")}
     </table>` : "<p>Inga brister noterade.</p>"}
-    ${CHECKLIST.map((a) => `<h2>${esc(a.titel)}</h2>${areaNA(rond, a.id) ? "<p>Ej aktuellt för arbetsplatsen</p>" : `<table>${areaRows(rond, a).map((r) => {
-      const s = rond.svar[r.id] || {};
-      return `<tr><td>${esc(r.text)}${s.kommentar ? `<br><small>${esc(s.kommentar)}</small>` : ""}</td><td>${STATUS[s.status] || "Ej bedömd"}</td></tr>`;
-    }).join("")}</table>`}`).join("")}
+    <h2>Gemensamt för kontoret</h2>
+    ${areasFor(rond, KONTOR).map((a) => `<h3>${esc(a.titel)}</h3>${areaNA(rond, KONTOR, a.id) ? "<p>Ej aktuellt</p>" : rowsTable(KONTOR, a)}`).join("")}
+    ${rond.byggnad.vaningar.map((v) => `<h2>${esc(v.namn)}</h2><table>${areasFor(rond, v.id).map((a) => {
+      const sum = areaSummary(rond, v.id, a);
+      return `<tr><td>${esc(a.titel)}${sum.avvikelser.map(({ r, s, status }) => `<br><small>${STATUS[status] || "Ej bedömd"}: ${esc(r.text)}${s.kommentar ? " - " + esc(s.kommentar) : ""}</small>`).join("")}</td><td>${esc(sum.label)}</td></tr>`;
+    }).join("")}</table>`).join("")}
     <p style="margin-top:40px">______________________ &nbsp;&nbsp; ______________________<br>Rondledare &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; Skyddsombud</p>`;
   const prevTitle = document.title;
   document.title = fileName(rond).replace(/\.pdf$/, "");

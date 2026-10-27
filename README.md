@@ -1,6 +1,8 @@
 # Skyddsrond
 
-Ett avskalat verktyg för att göra skyddsrond på kontoret. Du går runt, bedömer rad för rad och exporterar protokollet som PDF.
+Ett avskalat verktyg för att göra skyddsrond på kontoret. Du går runt våning för våning, bedömer och exporterar protokollet som PDF.
+
+Frågorna är av tre slag: *gemensamma* frågor som besvaras en gång, frågor *per våning*, och *platser* (reception, godsmottagning, soprum, städrum) som bara visas på våningen där de finns. Varje område på en våning har knappen *Allt OK*, så att du bara behöver gå in i detalj där något avviker.
 
 Krav och design finns i [SPEC.md](SPEC.md). Ändra specen först och koden sedan.
 
