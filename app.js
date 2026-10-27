@@ -408,9 +408,10 @@ function rowHtml(rond, r) {
 function sideNavHtml(rond, current) {
   return units(rond).map((u) => {
     const c = counts(rond, unitRows(rond, u.id));
-    const st = c.brist ? `<span class="flag">${c.brist}</span>` : !c.tom ? "✓" : c.klara ? `${c.klara}/${c.total}` : "";
+    const st = c.brist ? `<span class="flag">${c.brist}</span>` : !c.tom ? "✓" : c.klara ? `<span class="cnt">${c.klara}/${c.total}</span>` : "";
+    const short = u.id === KONTOR ? "Gemensamt" : u.namn.replace(/^(våning|vån\.?|plan)\s*/i, "") || u.namn;
     return `<button type="button" data-go="${u.id}" ${u.id === current ? 'aria-current="page"' : ""}>
-      <span>${esc(u.id === KONTOR ? "Gemensamt" : u.namn)}</span><span class="meta">${st}</span></button>`;
+      <span class="full">${esc(u.id === KONTOR ? "Gemensamt" : u.namn)}</span><span class="short">${esc(short)}</span><span class="meta">${st}</span></button>`;
   }).join("");
 }
 
